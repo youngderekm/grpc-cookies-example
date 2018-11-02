@@ -17,7 +17,9 @@ func (s *server) SignIn(ctx context.Context, signInRequest *servicedef.SignInReq
 		// normally a user ID would come from a database or other external service, but
 		// for this demo we'll hardcode it
 		userID := 98765
-		// login is valid
+		rlog.Debugf("Logging in user %d", userID)
+		// login is valid, so tell gateway to set
+		// the user ID in the session
 		SetUserIDInContext(ctx, userID)
 	} else {
 		return nil, status.Error(codes.InvalidArgument, "Invalid username/password combination")

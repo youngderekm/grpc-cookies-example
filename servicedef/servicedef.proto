@@ -19,7 +19,7 @@ service AuthApi {
     // signout, deleting any existing session/cookie
     rpc SignOut(google.protobuf.Empty) returns (google.protobuf.Empty) {
         option (google.api.http) = {
-            post: "/v1/api/auth/signout"
+            post: "/v1/authapi/signout"
         };
     }
 }

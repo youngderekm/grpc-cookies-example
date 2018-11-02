@@ -3,10 +3,10 @@
 package main
 
 import (
-	"fmt"
 	"net"
 	"os"
 
+	"github.com/romana/rlog"
 	"github.com/youngderekm/grpc-cookies-example/servicedef"
 	"google.golang.org/grpc"
 	"google.golang.org/grpc/reflection"
@@ -17,6 +17,9 @@ type server struct {
 }
 
 func main() {
+	// log at debug for this demo
+	os.Setenv("RLOG_LOG_LEVEL", "DEBUG")
+	rlog.UpdateEnv()
 
 	// Create the grpc server
 	grpcServer := grpc.NewServer()
@@ -27,15 +30,18 @@ func main() {
 	servicedef.RegisterAuthApiServer(grpcServer, &authServer)
 
 	// Set up the listener
-	lis, err := net.Listen("tcp", "localhost:50051")
+	hostAndPort := "localhost:50051"
+	lis, err := net.Listen("tcp", hostAndPort)
 	if err != nil {
-		fmt.Printf("API server failed on net.Listen: %v\n", err)
+		rlog.Criticalf("API server failed on net.Listen: %v", err)
 		os.Exit(1)
 	}
 
+	rlog.Infof("Listening for gRPC requests at %s", hostAndPort)
+
 	reflection.Register(grpcServer) // Register reflection service on gRPC api.
 	if err := grpcServer.Serve(lis); err != nil {
-		fmt.Printf("API server failed on grpc Serve: %v\n", err)
+		rlog.Criticalf("API server failed on grpc Serve: %v", err)
 		os.Exit(1)
 	}
 }

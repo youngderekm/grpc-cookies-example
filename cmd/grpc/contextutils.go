@@ -3,7 +3,6 @@ package main
 import (
 	"strconv"
 
-	"github.com/pkg/errors"
 	"golang.org/x/net/context"
 	"google.golang.org/grpc"
 	"google.golang.org/grpc/metadata"
@@ -48,7 +47,7 @@ func GetUIDFromContext(ctx context.Context) (int, error) {
 		if userIDString != "" {
 			userID, err := strconv.Atoi(userIDString)
 			if err != nil {
-				return 0, errors.Wrap(err, "unable to parse userId")
+				return 0, err
 			}
 			return userID, nil
 		}

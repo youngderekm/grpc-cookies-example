@@ -10,7 +10,6 @@ import (
 
 	"encoding/gob"
 	"fmt"
-	"log"
 	"os"
 	"os/signal"
 	"strconv"
@@ -20,7 +19,6 @@ import (
 	"github.com/gorilla/handlers"
 	"github.com/gorilla/mux"
 	"github.com/gorilla/sessions"
-	"github.com/pkg/errors"
 	"github.com/romana/rlog"
 	"google.golang.org/grpc/metadata"
 )
@@ -54,6 +52,7 @@ const (
 // Global session store
 var sessionStore sessions.Store
 
+// Middleware that will store the http.Request into the Context
 type gatewayMiddleware struct {
 }
 
@@ -73,6 +72,11 @@ func (middleware *gatewayMiddleware) Middleware(next http.Handler) http.Handler 
 	})
 }
 
+// pull the request from context (set in middleware above)
+func getRequestFromContext(ctx context.Context) *http.Request {
+	return ctx.Value(requestContextKey).(*http.Request)
+}
+
 // get the first metadata value with the given name
 func firstMetadataWithName(md runtime.ServerMetadata, name string) string {
 	values := md.HeaderMD.Get(name)
@@ -82,7 +86,7 @@ func firstMetadataWithName(md runtime.ServerMetadata, name string) string {
 	return values[0]
 }
 
-// extract the userId from the server meta data, if available.  userId will be 0 if
+// extract the user ID from the server meta data, if available.  user ID will be 0 if
 // it wasn't set in the metadata
 func getUserIDFromServerMetadata(md runtime.ServerMetadata) (int, error) {
 	userIDString := firstMetadataWithName(md, "gateway-session-userId")
@@ -113,35 +117,32 @@ func getBoolFromServerMetadata(md runtime.ServerMetadata, name string, defaultVa
 	return defaultValue, nil
 }
 
-// pull the request from context (set in middleware above)
-func getRequestFromContext(ctx context.Context) *http.Request {
-	return ctx.Value(requestContextKey).(*http.Request)
-}
-
-// look to see if the grpc method we called tells us to do something special with the session
+// look to see if the gRPC method we called tells us to do something special with the session
 // (create, update, delete).  If so, take that action here.
 // see
 //   https://github.com/grpc-ecosystem/grpc-gateway/blob/master/docs/_docs/customizingyourgateway.md
 func gatewayResponseModifier(ctx context.Context, response http.ResponseWriter, _ proto.Message) error {
 	md, ok := runtime.ServerMetadataFromContext(ctx)
 	if !ok {
-		return errors.New("Failed to extract ServerMetadata from context")
+		return fmt.Errorf("Failed to extract ServerMetadata from context")
 	}
+	// did the gRPC method set a user ID in the metadata?
 	userID, err := getUserIDFromServerMetadata(md)
 	if err != nil {
 		return err
 	}
 
 	if userID != 0 {
-		rlog.Debugf("grpc call set userId to %s", userID)
+		rlog.Debugf("gRPC call set userId to %d", userID)
 
 		// pull the request from context (set in middleware above)
-		r := getRequestFromContext(ctx)
+		request := getRequestFromContext(ctx)
 
 		// create or get the session
-		session, err := sessionStore.New(r, defaultSessionID)
+		session, err := sessionStore.New(request, defaultSessionID)
 		if err != nil {
-			return errors.Wrap(err, "session creation; could not get default session")
+			rlog.Error(err, "couldn't create a session")
+			return err
 		}
 		session.Options.MaxAge = sessionLength
 		session.Options.Path = "/"
@@ -154,11 +155,14 @@ func gatewayResponseModifier(ctx context.Context, response http.ResponseWriter, 
 
 		// put the userId into session
 		session.Values["userId"] = userIDSession
-		if err := sessionStore.Save(r, response, session); err != nil {
-			return errors.Wrap(err, "signin failed; could not save session")
+		// save the session, creating a cookie from it
+		if err := sessionStore.Save(request, response, session); err != nil {
+			rlog.Error(err, "couldn't save the session as a cookie")
+			return err
 		}
 	}
 
+	// did the gRPC method called set a flag telling us to delete the session?
 	deleteSession, err := getBoolFromServerMetadata(md, "gateway-session-delete", false)
 	if err != nil {
 		return err
@@ -170,12 +174,15 @@ func gatewayResponseModifier(ctx context.Context, response http.ResponseWriter, 
 		// as documented, to delete session, set max age to -1
 		session, err := sessionStore.New(r, defaultSessionID)
 		if err != nil {
-			return errors.Wrap(err, "session creation; could not get default session")
+			rlog.Error(err, "couldn't create empty session")
+			return err
 		}
 		session.Options.MaxAge = -1
 		session.Options.Path = "/"
+		// "save" the session with maxage = -1, clearing it
 		if err := sessionStore.Save(r, response, session); err != nil {
-			return errors.Wrap(err, "delete session failed; could not save session")
+			rlog.Error(err, "couldn't delete session")
+			return err
 		}
 	}
 
@@ -186,15 +193,17 @@ func gatewayResponseModifier(ctx context.Context, response http.ResponseWriter, 
 func gatewayMetadataAnnotator(_ context.Context, r *http.Request) metadata.MD {
 	session, err := sessionStore.Get(r, defaultSessionID)
 	if err != nil {
-		// empty
+		// no session, or invalid session, so pass along no extra metadata
 		return metadata.Pairs()
 	}
 	if userIDSessionValue, ok := session.Values["userId"]; ok {
+		// convert back to a Session
 		userIDSession := userIDSessionValue.(*Session)
 		userID := userIDSession.UserID
+		// set user ID from session in the gRPC metadata
 		return metadata.Pairs("userId", strconv.Itoa(userID))
 	}
-	// empty
+	// otherwise pass no extra metadata along
 	return metadata.Pairs()
 }
 
@@ -244,8 +253,9 @@ func serve() error {
 
 	// Run our server in a goroutine so that it doesn't block.
 	go func() {
+		rlog.Infof("Listening for JSON requests at %s", gatewayAddr)
 		if err := srv.ListenAndServe(); err != nil {
-			log.Println(err)
+			rlog.Error(err)
 		}
 	}()
 
@@ -272,6 +282,10 @@ func serve() error {
 }
 
 func main() {
+	// log at debug for this demo
+	os.Setenv("RLOG_LOG_LEVEL", "DEBUG")
+	rlog.UpdateEnv()
+
 	if err := serve(); err != nil {
 		fmt.Println(err)
 		os.Exit(1)
