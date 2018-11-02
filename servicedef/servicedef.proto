@@ -1,0 +1,30 @@
+
+
+syntax = "proto3";
+
+package servicedef;
+
+import "google/api/annotations.proto";
+import "google/protobuf/empty.proto";
+
+service AuthApi {
+    // signin, establishing a session with cookie
+    rpc SignIn(SignInRequest) returns (google.protobuf.Empty) {
+        option (google.api.http) = {
+            post: "/v1/authapi/signin",
+            body: "*",
+        };
+    }
+
+    // signout, deleting any existing session/cookie
+    rpc SignOut(google.protobuf.Empty) returns (google.protobuf.Empty) {
+        option (google.api.http) = {
+            post: "/v1/api/auth/signout"
+        };
+    }
+}
+
+message SignInRequest {
+    string username = 1;
+    string password = 2;
+}
